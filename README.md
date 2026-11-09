@@ -5,9 +5,20 @@
 **A Raycast-esque launcher for [Omarchy](https://omarchy.org).**
 It learns what you use, searches your apps and every Omarchy action, and looks like it shipped with your theme.
 
-<img src="docs/screenshots/hero.png" alt="omacast showing suggestions for apps and Omarchy commands" width="760">
+<img src="docs/screenshots/hero.png" alt="omacast drawn like the Omarchy menu: a plain search line over Omarchy-style rows" width="760">
 
 </div>
+
+> **This fork draws omacast like Omarchy's own menu.** Same features and keys as
+> [typecraft-dev/oma-cast](https://github.com/typecraft-dev/oma-cast), but the window is built from
+> the same theme tokens and layout as Omarchy 4.5's menu, clipboard and emoji windows: the dim
+> layer behind a centred card, the theme's corner rounding, a plain search line, 50 px rows with
+> the path under the label and the theme's selected colours, › on submenus, and no footer
+> (messages show in Omarchy's on-screen display). Press **?** on an empty search for every
+> keyboard shortcut. The Omarchy menu rows follow the language picked under Setup > Language.
+> Install it from this fork with the same steps below, using
+> `https://github.com/kenners22/oma-cast` instead of typecraft's URL. It uses the same plugin id,
+> so it replaces typecraft's version rather than running beside it.
 
 ---
 
@@ -18,14 +29,14 @@ Omarchy's built-in menu is great at what it does. omacast adds what Raycast user
 * **Learns your habits.** Results are ranked with a port of Raycast's root-search algorithm, plus frecency and learned search terms. The things you actually use float to the top, and if you type `ff` and pick Firefox, `ff` keeps meaning Firefox.
 * **One search for everything.** Your apps, all ~400 Omarchy menu actions (with breadcrumbs and live ✓ state), and web-search fallbacks.
 * **Your shortcuts.** Give anything an alias, pin favorites, and hide the commands you never touch.
-* **Keyboard-first.** A Ctrl+K action panel, Ctrl+1–9 quick picks, search history on ↑, section jumping, and emacs-style navigation.
+* **Keyboard-first.** A Ctrl+K action panel, every shortcut on ?, Ctrl+1–9 quick picks, search history on ↑, section jumping, and emacs-style navigation.
 * **Native to Omarchy.** It runs inside `omarchy-shell` as a plugin, with no Electron, no Node and no extra daemons. It opens in about 40 ms and follows your theme live when you run `omarchy theme set`.
 
 ## Screenshots
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/search.png" alt="Searching 'screen' shows Omarchy actions with breadcrumbs"></td>
+    <td width="50%"><img src="docs/screenshots/search.png" alt="Searching 'capture' shows Omarchy actions with their path under each one"></td>
     <td width="50%"><img src="docs/screenshots/actions.png" alt="The Ctrl+K action panel"></td>
   </tr>
   <tr>
@@ -34,16 +45,20 @@ Omarchy's built-in menu is great at what it does. omacast adds what Raycast user
   </tr>
 </table>
 
-<p align="center">
-  <img src="docs/screenshots/fallbacks.png" alt="Web-search fallbacks under the results" width="49%">
-</p>
-<p align="center"><b>No match? Send the query to Google or DuckDuckGo</b></p>
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/fallbacks.png" alt="Web-search fallbacks when nothing matches"></td>
+    <td width="50%"><img src="docs/screenshots/shortcuts.png" alt="The Keyboard Shortcuts list"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>No match? Send the query to Google or DuckDuckGo</b></td>
+    <td align="center"><b>?: every keyboard shortcut</b></td>
+  </tr>
+</table>
 
 ### Follows your Omarchy theme
 
-There's no theme config. omacast binds to Omarchy's own colours, so it changes the moment you switch themes.
-
-<img src="docs/screenshots/themes.png" alt="omacast in Tokyo Night, Gruvbox, Rose Pine, Flexoki Light, Everforest and Osaka Jade">
+There's no theme config. omacast binds to Omarchy's own colours, rounding, spacing and fonts, so it changes the moment you switch themes.
 
 ## Install
 
@@ -121,6 +136,7 @@ the old plugin link and `~/.local/bin/oma-cast`, and `omacast setup hyprland` mo
 | `↵` / `Ctrl+↵` / `Ctrl+Shift+↵` | Run the first, second or third action |
 | `Shift+↵` | Open a new window of an app (`↵` switches to the one already open) |
 | `Ctrl+K` | Open the action panel |
+| `?` on an empty search | Show every keyboard shortcut (also the command "Keyboard Shortcuts") |
 | `Super+V` / `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` | Paste text into the query (also accepts clipboard-history selections) |
 | `Ctrl+1`…`9` | Pick a result |
 | `↑` on an empty search | Search history |

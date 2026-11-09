@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import "core/Rpc.js" as Rpc
 import "core/Paths.js" as Paths
 import "core/Log.js" as Log
@@ -89,12 +90,59 @@ Item {
     return (DesktopEntries.applications.values || []).filter(function(e) { return !e.noDisplay })
   }
 
+  // omacast's own words follow the language picked under Setup > Language,
+  // live, the way Omarchy's plugins do (Commons.Translations, one flat JSON
+  // catalog per language in i18n/, keyed by the English text; a missing
+  // string falls back to English). Only omacast's own text is translated:
+  // never app names or other content. [D 2026-11-09]
+  Commons.Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
+  readonly property var catalog: strings.strings
+  readonly property string language: strings.language
+
+  function tr(text) {
+    var s = String(text === undefined || text === null ? "" : text)
+    return s ? strings.t(s, s) : s
+  }
+
+  // Counted labels arrive from core/RootSearch.js already in English
+  // ("5 min ago"); match them back to their catalog entry.
+  readonly property var countedLabels: [
+    [/^(\d+) min ago$/, "%1 min ago"],
+    [/^(\d+) h ago$/, "%1 h ago"],
+    [/^(\d+) days ago$/, "%1 days ago"]
+  ]
+  function trCounted(part) {
+    if (backend.catalog[part] !== undefined) return backend.tr(part)
+    for (var i = 0; i < backend.countedLabels.length; i++) {
+      var m = backend.countedLabels[i][0].exec(part)
+      if (m) {
+        var n = Number(m[1])
+        return strings.tn(backend.countedLabels[i][1], n, part).arg(Commons.I18n.formatNumber(n))
+      }
+    }
+    return part
+  }
+  // A label may join several parts with " · ".
+  function trLabel(text) {
+    var s = String(text || "")
+    if (backend.catalog[s] !== undefined) return backend.tr(s)
+    return s.split(" · ").map(backend.trCounted).join(" · ")
+  }
+
+  onLanguageChanged: backend.rebuildCandidates()
+
   function rebuildCandidates() {
     var next = []
     var apps = backend.appEntries()
     for (var i = 0; i < apps.length; i++) if (apps[i] && apps[i].id) next.push(RootSearch.appCandidate(apps[i]))
     next = next.concat(RootSearch.menuCandidates(menuSource.tree, menuSource.guards, menuSource.providerItems, backend.deps))
-    for (var b = 0; b < RootSearch.BUILTINS.length; b++) next.push(RootSearch.builtinCandidate(RootSearch.BUILTINS[b]))
+    for (var b = 0; b < RootSearch.BUILTINS.length; b++) {
+      var builtin = RootSearch.builtinCandidate(RootSearch.BUILTINS[b])
+      // The translated name is findable too; the English one stays the title.
+      var local = backend.tr(builtin.title)
+      if (local !== builtin.title) builtin.keywords = builtin.keywords.concat([local])
+      next.push(builtin)
+    }
     var byId = ({})
     for (var j = 0; j < next.length; j++) byId[next[j].id] = next[j]
     var entries = FleaSearch.entries(next, Ranker.transliterate)
@@ -429,6 +477,7 @@ Item {
         var sections
         if (view && view.kind === "menu") sections = RootSearch.submenuSections(backend.candidates, view.menuId, query, ctx, backend.deps)
         else if (view && view.kind === "calculator-history") sections = RootSearch.historySections(calculatorStore.doc.history, query, ctx.nowMs, Calculator.filterHistory)
+        else if (view && view.kind === "shortcuts") sections = RootSearch.shortcutSections(query, backend.callSync("settings.getGeneralSettings", null).data.navigationBindings === "vim-motions")
         else {
           ctx.filter = String(data && data.filter || "all")
           if (query.trim() && ctx.filter === "all") ctx.calculation = backend.calculate(query)
@@ -442,6 +491,8 @@ Item {
         var rowId = String(data && data.id || "")
         if (rowId === RootSearch.CALCULATOR_ID) return RootSearch.actionsFor({ kind: "calculator" })
         if (rowId.indexOf("calculator-history:") === 0) return RootSearch.actionsFor({ kind: "calculator-history" })
+        // A shortcut row only tells you the key; it has nothing to run.
+        if (rowId.indexOf("shortcut:") === 0) return []
         var candidate = backend.decorated(rowId)
         if (!candidate) {
           var fallback = RootSearch.FALLBACKS.filter(function(f) { return f.id === data.id })[0]

@@ -34,9 +34,10 @@ test("loading feedback delays fast work, preserves toasts and resets across hide
     assert.ok(declaration, "missing loading property: " + name)
     return declaration[0]
   }).join("\n")
-  // Footer sample: "id: footerStatus\n  text: window.toast ? window.toast.title : window.view.title".
-  const footer = source.match(/id: footerStatus\s+[\s\S]*?text: ([^\n]+)/)
-  assert.ok(footer, "missing footer status binding")
+  // Header sample: "id: headerStatus\n  ...\n  text: window.loadingVisible ? \"Loading…\" : \"\"".
+  // Toasts go to Omarchy's OSD, so only loading shows in the window.
+  const footer = source.match(/id: headerStatus\s+[\s\S]*?text: ([^\n]+)/)
+  assert.ok(footer, "missing header status binding")
   const env = { ...process.env, HOME: root, TMPDIR: root, QT_QPA_PLATFORM: "offscreen", QML_DISABLE_DISK_CACHE: "1" }
   for (const key of ["XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR"]) {
     env[key] = path.join(root, key)
@@ -51,6 +52,7 @@ ShellRoot {
   property bool shown: false
   property var toast: null
   property var view: ({ title: "omacast" })
+  function tr(text) { return text }
   ${declarations}
   ${qmlBlock("onBusyChanged: {")}
   ${qmlBlock("Timer {\n    id: loadingDelay")}
@@ -58,17 +60,17 @@ ShellRoot {
   property int stage: 0
   function check(ok, detail) { if (!ok) throw new Error(detail) }
   property var stages: [
-    { wait: 50, run: function() { check(!window.loadingVisible && window.footerText === "omacast", "fast work flashed"); backend.loading = false } },
+    { wait: 50, run: function() { check(!window.loadingVisible && window.footerText === "", "fast work flashed"); backend.loading = false } },
     { wait: loadingFeedbackDelay + 80, run: function() { check(!window.loadingVisible, "completed work left a pending cue"); backend.loading = true } },
     { wait: loadingFeedbackDelay + 80, run: function() { check(window.loadingVisible && window.footerText === "Loading…", "slow work lacks feedback"); window.toast = { title: "<b>Copied</b>" } } },
-    { wait: 30, run: function() { check(window.footerText === "<b>Copied</b>", "toast lost priority"); window.toast = null; backend.loading = false } },
-    { wait: 30, run: function() { check(!window.loadingVisible && window.footerText === "omacast", "completion did not restore context"); backend.loading = true } },
+    { wait: 30, run: function() { check(window.footerText === "Loading…", "a toast hid the loading cue"); window.toast = null; backend.loading = false } },
+    { wait: 30, run: function() { check(!window.loadingVisible && window.footerText === "", "completion did not restore context"); backend.loading = true } },
     { wait: 100, run: function() { window.shown = false } },
     { wait: loadingFeedbackDelay + 80, run: function() { check(!window.loadingVisible, "hidden window retained feedback"); window.shown = true } },
     { wait: 100, run: function() { check(!window.loadingVisible, "reopen reused an old delay") } },
     { wait: loadingFeedbackDelay + 80, run: function() { check(window.loadingVisible, "reopen lost persistent loading"); window.shown = false } },
     { wait: 30, run: function() { check(!window.loadingVisible, "close retained visible feedback"); backend.loading = false; window.shown = true } },
-    { wait: loadingFeedbackDelay + 80, run: function() { check(!window.loadingVisible && window.footerText === "omacast", "idle reopen flashed"); console.log("OMACAST_LOADING_PROBE:OK"); Qt.quit() } }
+    { wait: loadingFeedbackDelay + 80, run: function() { check(!window.loadingVisible && window.footerText === "", "idle reopen flashed"); console.log("OMACAST_LOADING_PROBE:OK"); Qt.quit() } }
   ]
   Timer {
     id: tick

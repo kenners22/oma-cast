@@ -1,37 +1,22 @@
 import QtQuick
 import qs.Commons
 
-Row {
+// A shortcut written the way Omarchy writes its own ("SUPER + B",
+// "Alt + Tab"): plain text joined with " + ", no key caps. ↵ becomes Enter
+// because the menu font has no return glyph and a fallback font draws it
+// small and low. [D 2026-11-09]
+Text {
   id: hint
 
   property string keys: ""
-  property color color: "white"
-  property string fontFamily: Style.font.menuFamily
-  property int pixelSize: Style.font.caption
   property real zoom: 1
+  property string fontFamily: Style.font.menuFamily
 
-  spacing: Math.max(2, Math.round(Style.space(3) * hint.zoom))
+  readonly property var names: ({ "↵": "Enter", "⌫": "Backspace", "⎋": "Esc", "⇥": "Tab" })
 
-  Repeater {
-    model: hint.keys ? hint.keys.split(" ") : []
-
-    Rectangle {
-      required property string modelData
-      height: label.implicitHeight + Math.round(Style.space(4) * hint.zoom)
-      width: Math.max(height, label.implicitWidth + Math.round(Style.space(10) * hint.zoom))
-      radius: Math.round(Style.space(4) * hint.zoom)
-      color: Util.alpha(hint.color, 0.1)
-
-      Text {
-        id: label
-        anchors.centerIn: parent
-        textFormat: Text.PlainText
-        text: parent.modelData
-        color: hint.color
-        opacity: 0.75
-        font.family: hint.fontFamily
-        font.pixelSize: hint.pixelSize
-      }
-    }
-  }
+  textFormat: Text.PlainText
+  text: hint.keys ? hint.keys.split(" ").map(function(k) { return hint.names[k] || k }).join(" + ") : ""
+  opacity: 0.45
+  font.family: hint.fontFamily
+  font.pixelSize: Math.round(Style.font.bodySmall * hint.zoom)
 }

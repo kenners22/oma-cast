@@ -52,6 +52,27 @@ function parse(raw) {
   return { items: items, error: "" }
 }
 
+// Omarchy's own menu translations (default/i18n/<code>/menu.json, keyed by
+// item id), applied the way the shell's menu does (MenuModel.applyTranslations):
+// the translated label shows, and the English one stays findable as an alias.
+// Only the shipped rows are translated; the user's extension merges on top. [D 2026-11-09]
+function applyTranslations(items, catalog) {
+  var strings = catalog && typeof catalog === "object" ? catalog : {}
+  return (items || []).map(function(entry) {
+    var translated = entry && strings[entry.id]
+    if (!translated || typeof translated !== "object") return entry
+    var next = {}
+    for (var k in entry) next[k] = entry[k]
+    if (typeof translated.label === "string" && translated.label) {
+      if (translated.label !== entry.label && entry.label && next.aliases.indexOf(entry.label) < 0) next.aliases = next.aliases.concat([entry.label])
+      next.label = translated.label
+    }
+    if (typeof translated.title === "string" && translated.title) next.title = translated.title
+    if (typeof translated.description === "string" && translated.description) next.description = translated.description
+    return next
+  })
+}
+
 function buildTree(defaultItems, userItems) {
   var byId = {}
   var order = []
@@ -213,6 +234,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     stripJsonc: stripJsonc,
     parse: parse,
+    applyTranslations: applyTranslations,
     buildTree: buildTree,
     breadcrumb: breadcrumb,
     depth: depth,

@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
@@ -49,11 +50,22 @@ PanelWindow {
   readonly property real zoom: window.general.uiZoom > 0 ? window.general.uiZoom : 1
   function px(value) { return Math.round(Style.space(value) * window.zoom) }
 
+  // Everything the surface draws comes from the same theme tokens as
+  // Omarchy's own menu, clipboard and emoji windows (Commons.Color.menu.*,
+  // popups.* and Style.*), so `omarchy theme set` restyles it live. [D 2026-11-09]
   readonly property var look: ({
     background: Commons.Color.menu.background,
     foreground: Commons.Color.menu.text,
     accent: Commons.Color.menu.selectedText,
     selectedBackground: Commons.Color.menu.selectedBackground,
+    selectedText: Commons.Color.menu.selectedText,
+    selectedBorderSpec: Border.surfaceSpec("menu", "selected-border", Commons.Color.menu.selectedBorder, 0),
+    scrim: Commons.Color.menu.scrim,
+    urgent: Commons.Color.urgent,
+    popupBackground: Commons.Color.popups.background,
+    popupText: Commons.Color.popups.text,
+    popupBorderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2))),
+    radius: Style.cornerRadius,
     fontFamily: Style.font.menuFamily
   })
   readonly property var borderSpec: Border.surfaceSpec("menu", "border", Commons.Color.menu.border, Math.max(1, Style.space(2)))
@@ -95,15 +107,20 @@ PanelWindow {
 
   readonly property bool atRoot: window.stack.length === 1
   readonly property bool compact: window.general.windowMode === "compact" && window.atRoot && !window.query
-  readonly property string placeholder: window.view.kind === "alias" ? "Type an alias, then press ↵"
-    : window.view.kind === "menu" ? "Search " + window.view.title + "…"
-    : window.view.kind === "calculator-history" ? "Search calculations…"
-    : "Search for apps and commands…"
+  function tr(text) { return window.backend.tr(text) }
+  readonly property string placeholder: window.view.kind === "alias" ? window.tr("Type an alias, then press Enter")
+    : window.view.kind === "menu" ? window.tr("Search %1…").arg(window.tr(window.view.title))
+    : window.view.kind === "calculator-history" ? window.tr("Search calculations…")
+    : window.view.kind === "shortcuts" ? window.tr("Search shortcuts…")
+    : window.tr("Search for apps and commands…")
 
+  // Omarchy's card metrics (plugins/menu/Menu.qml, clipboard, emojis):
+  // panel padding all round, a header sized from the title font, md spacing.
   readonly property int cardWidth: Math.min(px(750), width - Style.gapsOut * 2)
-  readonly property int fullHeight: Math.min(px(475), height - Style.gapsOut * 2)
-  readonly property int headerHeight: px(66)
-  readonly property int footerHeight: px(42)
+  readonly property int fullHeight: Math.min(px(500), height - Style.gapsOut * 2)
+  readonly property int contentMargin: Math.round(Style.spacing.panelPadding * window.zoom)
+  readonly property int contentSpacing: Math.round(Style.spacing.md * window.zoom)
+  readonly property int headerHeight: Math.max(px(34), Math.round((Style.font.title + Style.spacing.controlPaddingY * 2) * window.zoom))
 
   ListModel { id: rows }
 
@@ -210,16 +227,27 @@ PanelWindow {
     else window.select(keepIndex >= 0 ? keepIndex : window.nextSelectable(-1, 1))
   }
 
+  // Omarchy's rows name no kind, so Command / Application / Fallback /
+  // Calculator labels are dropped here (the About panel keeps them) and a
+  // menu gets Omarchy's ›. omacast's own words are translated; content
+  // (apps, the Omarchy menu, already translated by
+  // Omarchy's catalog) is left alone. [D 2026-11-09]
+  readonly property var kindLabels: ["Command", "Application", "Fallback", "Calculator", "Menu"]
+  function ownText(c, kind) {
+    return kind === "section" || /^(builtin|fallback|shortcut):/.test(String(c.id || ""))
+  }
   function rowData(c, kind) {
+    var own = window.ownText(c, kind)
+    var typeLabel = String(c.typeLabel || "")
     return {
       rowKind: kind,
       itemId: String(c.id || ""),
-      title: String(c.title || ""),
-      subtitle: String(c.subtitle || ""),
+      title: own ? window.backend.trLabel(c.title) : String(c.title || ""),
+      subtitle: own ? window.backend.trLabel(c.subtitle) : String(c.subtitle || ""),
       glyph: String(c.glyph || ""),
       glyphFont: String(c.glyphFont || ""),
       iconName: String(c.iconName || ""),
-      typeLabel: String(c.typeLabel || ""),
+      typeLabel: typeLabel === "Menu" || typeLabel === "›" ? "›" : window.kindLabels.indexOf(typeLabel) >= 0 ? "" : window.backend.trLabel(typeLabel),
       alias: String(c.alias || ""),
       checked: !!c.checked,
       disabled: !!c.disabled,
@@ -308,6 +336,8 @@ PanelWindow {
     if (window.searchPending) return
     if (index !== undefined && index >= 0) window.select(index)
     if (!window.selectedRow) return
+    // Keyboard Shortcuts rows only show a key; Enter there does nothing.
+    if (/^shortcut:/.test(window.selectedRow.itemId)) return
     window.actionPanelOpen = false
     // ↵ on a command with an empty required argument focuses that pill.
     if (actionId === "open" && window.argDefs.length) {
@@ -321,7 +351,11 @@ PanelWindow {
     var r = window.backend.callSync("rootSearch.performAction", payload)
     if (!r.ok) { window.showToast("failure", r.error); return }
     var outcome = r.data || {}
-    if (outcome.confirm) { window.alert = { spec: outcome.confirm, payload: payload }; return }
+    if (outcome.confirm) {
+      var spec = outcome.confirm
+      window.alert = { spec: { title: window.tr(spec.title), message: window.tr(spec.message), primary: window.tr(spec.primary), destructive: spec.destructive }, payload: payload }
+      return
+    }
     if (outcome.push) { window.push(outcome.push); return }
     if (outcome.close) {
       if (outcome.hud) window.hud(outcome.hud)
@@ -354,7 +388,13 @@ PanelWindow {
 
   function toggleActionPanel() {
     if (window.actionPanelOpen) { window.actionPanelOpen = false; return }
-    window.actions = window.actionsForSelected()
+    // Titles in the user's language; ids and shortcuts stay as they are.
+    window.actions = window.actionsForSelected().map(function(a) {
+      var copy = ({})
+      for (var k in a) copy[k] = a[k]
+      copy.title = window.tr(a.title)
+      return copy
+    })
     window.actionPanelOpen = window.actions.length > 0
     if (actionPanel.item) actionPanel.item.filter = ""
   }
@@ -378,7 +418,7 @@ PanelWindow {
     if (window.aboutOpen || !window.selectedRow) { window.aboutOpen = false; return }
     var r = window.backend.callSync("rootSearch.getItemInfo", { id: window.selectedRow.itemId, query: window.query })
     if (!r.ok) { window.showToast("failure", r.error); return }
-    window.aboutRows = r.data
+    window.aboutRows = (r.data || []).map(function(row) { return { label: window.tr(row.label), value: row.label === "Type" || row.label === "Saved" || row.label === "Last Opened" ? window.backend.trLabel(row.value) : row.value } })
     window.aboutOpen = r.data.length > 0
   }
 
@@ -448,6 +488,12 @@ PanelWindow {
     window.toast = { style: style, title: String(title || ""), actions: list }
     toastTimer.interval = list.length ? 6000 : 2500
     toastTimer.restart()
+    // Omarchy's windows have no status line; feedback is the shell's OSD,
+    // which draws over the launcher without taking the keyboard. The toast
+    // stays live for Ctrl+T, so the OSD names its first action. [D 2026-11-09]
+    var message = window.backend.trLabel(String(title || ""))
+    if (list.length) message += "  ·  Ctrl + T: " + window.tr(list[0].title)
+    window.osd(style === "failure" ? "\uf071" : "\uf00c", message, toastTimer.interval)
   }
 
   Timer {
@@ -457,7 +503,40 @@ PanelWindow {
   }
 
   function hud(text) {
-    Quickshell.execDetached(["omarchy-shell", "osd", "show", JSON.stringify({ icon: "", message: String(text), duration: 1500 })])
+    window.osd("\uf00c", window.backend.trLabel(String(text)), 1500)
+  }
+
+  // Omarchy's OSD. Plugins may not summon another plugin, so the request
+  // goes to the shell's own IPC socket the way the omarchy-shell CLI sends
+  // it (fields split by \x1f, ended by \x1e), but on stdin, so a message
+  // never appears in a process's arguments (rule 6 in CLAUDE.md). JSON
+  // escapes any control character in the message. [D 2026-11-09]
+  function osd(icon, message, duration) {
+    var request = ["osd", "show", JSON.stringify({ icon: icon, message: String(message), duration: duration })].join("\u001f") + "\u001e"
+    if (osdProc.running) { osdProc.queued = request; return }
+    osdProc.request = request
+    osdProc.stdinEnabled = true
+    osdProc.running = true
+  }
+
+  Process {
+    id: osdProc
+    property string request: ""
+    property string queued: ""
+    // Constant script: the socket name is worked out as omarchy-shell does.
+    command: ["bash", "-c", 'id=$(printf "%s\\n%s" "$OMARCHY_PATH/shell" "${WAYLAND_DISPLAY:-}" | md5sum); sock="${XDG_RUNTIME_DIR:-/run/user/$UID}/omarchy-shell-${id:0:16}.sock"; [[ -S $sock ]] || exit 1; exec timeout 2s socat -t 2 - "UNIX-CONNECT:$sock" >/dev/null']
+    onStarted: {
+      write(osdProc.request)
+      osdProc.request = ""
+      osdProc.stdinEnabled = false
+    }
+    onExited: {
+      if (!osdProc.queued) return
+      osdProc.request = osdProc.queued
+      osdProc.queued = ""
+      osdProc.stdinEnabled = true
+      osdProc.running = true
+    }
   }
 
 
@@ -636,6 +715,13 @@ PanelWindow {
       }
     }
 
+    // ? on an empty search shows every shortcut, as ? does in Omarchy's
+    // apps. Views where you type a name or path keep ? as text. [D 2026-11-09]
+    if (event.text === "?" && !window.query && window.argFocus < 0
+        && ["shortcuts", "alias"].indexOf(window.view.kind) < 0) {
+      window.push({ kind: "shortcuts", title: "Keyboard Shortcuts" })
+      return true
+    }
     if (Util.editsFilter(event, window.query)) { window.setQuery(Util.editedFilter(event, window.query)); return true }
     if (key === Qt.Key_Backspace && !window.query && !window.atRoot) { window.pop(); return true }
     if (window.isTyping(event)) { window.setQuery(window.query + event.text); return true }
@@ -652,8 +738,17 @@ PanelWindow {
     function onCandidatesRevisionChanged() { if (window.shown && !window.actionPanelOpen && !window.alert) window.rebuild(false) }
     // Exchange rates or zone offsets arrived: re-evaluate a calculation on screen.
     function onCalculatorRevisionChanged() { if (window.shown && !window.actionPanelOpen && window.query) window.rebuild(false) }
+    // A language switch under Setup > Language re-renders the rows live.
+    function onLanguageChanged() { if (window.shown) window.rebuild(true) }
+    function onCatalogChanged() { if (window.shown) window.rebuild(true) }
   }
 
+
+  // Omarchy's dim layer behind every menu-style card (menu.scrim).
+  Rectangle {
+    anchors.fill: parent
+    color: window.look.scrim
+  }
 
   MouseArea {
     anchors.fill: parent
@@ -663,12 +758,16 @@ PanelWindow {
   BorderSurface {
     id: card
     width: window.cardWidth
-    height: window.compact ? window.headerHeight + card.borderTop + card.borderBottom : window.fullHeight
-    radius: Math.max(Style.cornerRadius, window.px(8))
+    height: window.compact ? window.headerHeight + card.contentTopInset + card.contentBottomInset : window.fullHeight
+    radius: window.look.radius
     anchors.horizontalCenter: parent.horizontalCenter
-    y: Math.max(Style.gapsOut, Math.min(Math.round(window.height / 4), window.height - window.fullHeight - Style.gapsOut))
+    // Centred, as Omarchy's cards open. Compact mode keeps the full card's
+    // top line, so the first keystroke grows it downward instead of
+    // re-centring it (Menu.qml freezes its top for the same reason). [D]
+    y: Math.max(Style.gapsOut, Math.round((window.height - window.fullHeight) / 2))
     color: window.look.background
     borderSpec: window.borderSpec
+    padding: window.contentMargin
     clip: true
 
     MouseArea { anchors.fill: parent; onClicked: { window.closePopups(); keyCatcher.forceActiveFocus() } }
@@ -681,37 +780,40 @@ PanelWindow {
       Keys.onPressed: function(event) { if (window.handleKey(event)) event.accepted = true }
     }
 
+    // The search line: plain text at the heading size, a dimmed placeholder,
+    // no field chrome, no caret and no divider, like Omarchy's "Go…" line.
     Item {
       id: header
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.top: parent.top
-      anchors.topMargin: card.borderTop
-      anchors.leftMargin: card.borderLeft
-      anchors.rightMargin: card.borderRight
+      anchors.topMargin: card.contentTopInset
+      anchors.leftMargin: card.contentLeftInset
+      anchors.rightMargin: card.contentRightInset
       height: window.headerHeight
 
+      // Pushed views lead with Omarchy's submenu chevron, pointing back.
       Item {
         id: lead
-        width: window.px(28)
-        height: window.px(28)
+        visible: !window.atRoot
+        width: visible ? backGlyph.implicitWidth + window.px(10) : 0
+        height: parent.height
         anchors.left: parent.left
-        anchors.leftMargin: window.px(18)
-        anchors.verticalCenter: parent.verticalCenter
 
         Text {
-          anchors.centerIn: parent
+          id: backGlyph
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
           textFormat: Text.PlainText
-          text: window.atRoot ? "" : ""
-          font.family: window.atRoot ? "omarchy" : window.look.fontFamily
-          font.pixelSize: window.atRoot ? window.px(18) : window.px(15)
-          color: window.atRoot ? window.look.accent : window.look.foreground
-          opacity: window.atRoot ? 1 : 0.7
+          text: Commons.I18n.rightToLeft ? "›" : "‹"
+          color: window.look.foreground
+          opacity: 0.58
+          font.family: window.look.fontFamily
+          font.pixelSize: Math.round(Style.font.heading * window.zoom)
         }
 
         MouseArea {
           anchors.fill: parent
-          enabled: !window.atRoot
           cursorShape: Qt.PointingHandCursor
           onClicked: window.pop()
         }
@@ -719,38 +821,20 @@ PanelWindow {
 
       // Room left of the filter button; argument pills sit right after the
       // typed text (ref 04 §2.2 WidthSizer).
-      readonly property real queryRoom: (filterButton.visible ? filterButton.x - window.px(12) : header.width - window.px(20)) - queryText.x
+      readonly property real queryRoom: (filterButton.visible ? filterButton.x - window.px(12) : headerStatus.visible ? headerStatus.x - window.px(12) : header.width) - queryText.x
 
       Text {
         id: queryText
         textFormat: Text.PlainText
-        x: lead.x + lead.width + window.px(12)
+        x: lead.width
         width: Math.min(implicitWidth, header.queryRoom - (pills.visible ? pills.width + window.px(10) : 0))
         anchors.verticalCenter: parent.verticalCenter
         text: window.query || (pills.visible ? "" : window.placeholder)
         color: window.look.foreground
-        opacity: window.query ? 1 : 0.45
+        opacity: window.query ? 1 : 0.58
         font.family: window.look.fontFamily
-        font.pixelSize: Math.round(Style.font.heading * 1.15 * window.zoom)
+        font.pixelSize: Math.round(Style.font.heading * window.zoom)
         elide: Text.ElideLeft
-      }
-
-      Rectangle {
-        width: Math.max(1, Style.space(2))
-        height: queryText.font.pixelSize + Style.space(4)
-        anchors.verticalCenter: parent.verticalCenter
-        x: queryText.x + (window.query ? Math.min(queryText.contentWidth, queryText.width) + Style.space(1) : 0)
-        color: window.look.accent
-        visible: window.shown && !window.actionPanelOpen && window.argFocus < 0
-
-        SequentialAnimation on opacity {
-          running: window.shown
-          loops: Animation.Infinite
-          NumberAnimation { to: 1; duration: 0 }
-          PauseAnimation { duration: 530 }
-          NumberAnimation { to: 0; duration: 0 }
-          PauseAnimation { duration: 530 }
-        }
       }
 
       Row {
@@ -763,18 +847,19 @@ PanelWindow {
         Repeater {
           model: pills.visible ? window.argDefs : []
 
-          Rectangle {
+          // An argument is an Omarchy text control: normal fill and border,
+          // the focus colour while it takes the typing.
+          BorderSurface {
             id: pill
             required property var modelData
             required property int index
             readonly property string value: window.argValues[modelData.name] || ""
             readonly property bool focused: window.argFocus === index
-            height: window.px(28)
+            height: window.px(26)
             width: Math.min(window.px(220), pillText.implicitWidth + window.px(20))
-            radius: Math.max(Style.cornerRadius, window.px(6))
-            color: Util.alpha(window.look.foreground, pill.focused ? 0.12 : 0.06)
-            border.width: 1
-            border.color: pill.focused ? window.look.accent : Util.alpha(window.look.foreground, 0.15)
+            radius: Math.min(4, window.look.radius)
+            color: Style.controlFill(pill.focused, false, window.look.foreground, window.look.accent)
+            borderSpec: pill.focused ? Border.flat(window.look.selectedText, Style.normalBorderWidth) : Border.controlSpec("normal", window.look.foreground, window.look.accent)
 
             Text {
               id: pillText
@@ -785,7 +870,7 @@ PanelWindow {
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
               text: pill.value || (pill.modelData.placeholder + (pill.modelData.required ? "" : " (optional)"))
-              opacity: pill.value ? 1 : 0.5
+              opacity: pill.value ? 1 : 0.58
               color: window.look.foreground
               elide: Text.ElideLeft
               font.family: window.look.fontFamily
@@ -798,7 +883,7 @@ PanelWindow {
               height: pillText.font.pixelSize + Style.space(2)
               anchors.verticalCenter: parent.verticalCenter
               x: pillText.x + (pill.value ? Math.min(pillText.contentWidth, pillText.width) + Style.space(1) : 0)
-              color: window.look.accent
+              color: window.look.selectedText
             }
 
             MouseArea {
@@ -810,40 +895,55 @@ PanelWindow {
         }
       }
 
-      Rectangle {
-        id: filterButton
-        visible: window.atRoot && !window.compact
+      // Slow work says so at the end of the search line (after 500 ms).
+      Text {
+        id: headerStatus
+        visible: !filterButton.visible && text.length > 0
         anchors.right: parent.right
-        anchors.rightMargin: window.px(16)
         anchors.verticalCenter: parent.verticalCenter
-        height: window.px(28)
-        width: filterRow.implicitWidth + window.px(20)
-        radius: Math.max(Style.cornerRadius, window.px(6))
-        color: Util.alpha(window.look.foreground, window.dropdownOpen ? 0.12 : 0.06)
-        border.width: 1
-        border.color: Util.alpha(window.look.foreground, 0.12)
+        textFormat: Text.PlainText
+        text: window.loadingVisible ? window.tr("Loading…") : ""
+        color: window.look.foreground
+        opacity: 0.52
+        font.family: window.look.fontFamily
+        font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
+      }
+
+      // The root filter is Omarchy's Dropdown trigger: control fill and
+      // border, the 󰅀 chevron. Omarchy's search line carries nothing else,
+      // so it only shows while a filter is on or its list is open (Ctrl+P).
+      BorderSurface {
+        id: filterButton
+        visible: window.atRoot && !window.compact && (window.rootFilter !== "all" || window.dropdownOpen)
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        height: window.px(26)
+        width: filterRow.implicitWidth + Math.round(Style.spacing.controlPaddingX * 2 * window.zoom)
+        radius: Math.min(4, window.look.radius)
+        color: Style.controlFill(window.dropdownOpen, false, window.look.foreground, window.look.accent)
+        borderSpec: Border.controlSpec(window.dropdownOpen ? "focus" : "normal", window.look.foreground, window.look.accent)
 
         Row {
           id: filterRow
           anchors.centerIn: parent
-          spacing: window.px(6)
+          spacing: Math.round(Style.spacing.controlGap * window.zoom)
 
           Text {
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
-            text: (RootSearch.FILTERS.filter(function(f) { return f.id === window.rootFilter })[0] || RootSearch.FILTERS[0]).title
+            text: window.tr((RootSearch.FILTERS.filter(function(f) { return f.id === window.rootFilter })[0] || RootSearch.FILTERS[0]).title)
             color: window.look.foreground
             opacity: window.rootFilter === "all" ? 0.7 : 1
             font.family: window.look.fontFamily
-            font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
+            font.pixelSize: Math.round(Style.font.body * window.zoom)
           }
           Text {
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
-            text: "▾"
-            color: window.look.foreground
-            opacity: 0.6
-            font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
+            text: "󰅀"
+            color: Qt.darker(window.look.foreground, 1.2)
+            font.family: window.look.fontFamily
+            font.pixelSize: Math.round(Style.font.body * window.zoom)
           }
         }
 
@@ -853,15 +953,6 @@ PanelWindow {
           onClicked: { window.toggleDropdown(); keyCatcher.forceActiveFocus() }
         }
       }
-
-      Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: Style.spacing.hairline
-        color: Util.alpha(window.look.foreground, 0.12)
-        visible: !window.compact
-      }
     }
 
     Item {
@@ -870,18 +961,19 @@ PanelWindow {
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.top: header.bottom
-      anchors.bottom: footer.top
-      anchors.leftMargin: card.borderLeft + window.px(8)
-      anchors.rightMargin: card.borderRight + window.px(8)
+      anchors.topMargin: window.contentSpacing
+      anchors.bottom: parent.bottom
+      anchors.bottomMargin: card.contentBottomInset
+      anchors.leftMargin: card.contentLeftInset
+      anchors.rightMargin: card.contentRightInset
 
       ListView {
         id: list
         anchors.fill: parent
-        anchors.topMargin: window.px(4)
-        anchors.bottomMargin: window.px(4)
         visible: window.view.kind !== "alias"
         clip: true
         model: rows
+        spacing: Math.round(Style.spacing.xs * window.zoom)
         reuseItems: true
         boundsBehavior: Flickable.StopAtBounds
 
@@ -889,6 +981,7 @@ PanelWindow {
           Component.onCompleted: selected = index === window.selectedIndex
           ListView.onReused: selected = index === window.selectedIndex
           ListView.onPooled: selected = false
+          searching: window.query.length > 0
           look: window.look
           appLibrary: window.appLibrary
           zoom: window.zoom
@@ -897,152 +990,77 @@ PanelWindow {
         }
       }
 
-      Column {
-        anchors.centerIn: parent
-        spacing: window.px(8)
-        visible: window.view.kind === "alias" || rows.count === 0
-
-        Text {
-          anchors.horizontalCenter: parent.horizontalCenter
-          textFormat: Text.PlainText
-          text: window.view.kind === "alias" ? "" : ""
-          color: window.look.accent
-          font.family: window.view.kind === "alias" ? window.look.fontFamily : "omarchy"
-          font.pixelSize: window.px(28)
-        }
-        Text {
-          anchors.horizontalCenter: parent.horizontalCenter
-          textFormat: Text.PlainText
-          text: window.view.kind === "alias" ? window.view.title
-            : window.view.kind === "calculator-history" && !window.query ? "No Calculations Yet"
-            : (window.backend.ready ? "No results" : "Loading…")
-          color: window.look.foreground
-          font.family: window.look.fontFamily
-          font.pixelSize: Math.round(Style.font.title * window.zoom)
-        }
-        Text {
-          anchors.horizontalCenter: parent.horizontalCenter
-          textFormat: Text.PlainText
-          text: window.view.kind === "alias" ? "Typing the alias exactly in the root search puts this command on top. Leave it empty to remove it."
-            : window.view.kind === "calculator-history" && !window.query ? "Type a calculation in the root search, then copy or paste the answer." : ""
-          visible: text.length > 0
-          color: window.look.foreground
-          opacity: 0.55
-          font.family: window.look.fontFamily
-          font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
-        }
-      }
-    }
-
-    Rectangle {
-      id: footer
-      visible: !window.compact
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.bottom: parent.bottom
-      anchors.bottomMargin: card.borderBottom
-      anchors.leftMargin: card.borderLeft
-      anchors.rightMargin: card.borderRight
-      height: window.footerHeight
-      color: Util.alpha(window.look.foreground, 0.04)
-
+      // Omarchy's scroll scrims: each edge fades by how much is hidden past it.
       Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        height: Style.spacing.hairline
-        color: Util.alpha(window.look.foreground, 0.12)
+        height: Math.min(window.px(28), parent.height / 2)
+        visible: list.visible && opacity > 0
+        opacity: list.contentHeight > list.height ? Math.max(0, Math.min(1, (list.contentY - list.originY) / height)) : 0
+        gradient: Gradient {
+          GradientStop { position: 0; color: window.look.background }
+          GradientStop { position: 1; color: Util.alpha(window.look.background, 0) }
+        }
       }
 
-      Row {
+      Rectangle {
         anchors.left: parent.left
-        anchors.leftMargin: window.px(16)
-        anchors.verticalCenter: parent.verticalCenter
-        spacing: window.px(8)
-
-        Text {
-          anchors.verticalCenter: parent.verticalCenter
-          textFormat: Text.PlainText
-          text: window.toast ? (window.toast.style === "failure" ? "" : "") : ""
-          font.family: window.toast ? window.look.fontFamily : "omarchy"
-          font.pixelSize: window.toast ? window.px(12) : window.px(11)
-          color: window.toast && window.toast.style === "failure" ? "#e06c75" : window.look.accent
-        }
-        Text {
-          id: footerStatus
-          anchors.verticalCenter: parent.verticalCenter
-          textFormat: Text.PlainText
-          text: window.toast ? window.toast.title : window.loadingVisible ? "Loading…" : window.view.title
-          color: window.look.foreground
-          opacity: window.toast ? 0.9 : 0.6
-          elide: Text.ElideRight
-          width: Math.min(implicitWidth, footer.width / 2)
-          font.family: window.look.fontFamily
-          font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
-        }
-        KeyHint {
-          visible: !!window.toast && window.toast.actions.length > 0
-          anchors.verticalCenter: parent.verticalCenter
-          keys: "Ctrl T"
-          color: window.look.foreground
-          zoom: window.zoom
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: Math.min(window.px(28), parent.height / 2)
+        visible: list.visible && opacity > 0
+        opacity: list.contentHeight > list.height ? Math.max(0, Math.min(1, (list.originY + list.contentHeight - list.height - list.contentY) / height)) : 0
+        gradient: Gradient {
+          GradientStop { position: 0; color: Util.alpha(window.look.background, 0) }
+          GradientStop { position: 1; color: window.look.background }
         }
       }
 
-      Row {
-        id: footerActions
-        anchors.right: parent.right
-        anchors.rightMargin: window.px(14)
-        anchors.verticalCenter: parent.verticalCenter
+      // Empty states in Omarchy's form: a large glyph in the selected-text
+      // colour, then the message.
+      Column {
+        anchors.centerIn: parent
+        width: parent.width - window.contentMargin * 2
         spacing: window.px(8)
-
-        readonly property var primary: {
-          window.selectedRow
-          window.backend.storeRevision
-          if (window.view.kind === "alias") return { title: "Save Alias", shortcut: "↵" }
-          var list = window.actionsForSelected()
-          return list.length ? list[0] : null
-        }
+        visible: window.view.kind === "alias" || rows.count === 0
 
         Text {
-          visible: footerActions.primary !== null
-          anchors.verticalCenter: parent.verticalCenter
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
           textFormat: Text.PlainText
-          text: footerActions.primary ? footerActions.primary.title : ""
-          color: window.look.foreground
+          text: window.view.kind === "alias" ? "" : "󰈉"
+          color: window.look.selectedText
+          opacity: 0.8
           font.family: window.look.fontFamily
-          font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
-        }
-        KeyHint {
-          visible: footerActions.primary !== null
-          anchors.verticalCenter: parent.verticalCenter
-          keys: "↵"
-          color: window.look.foreground
-          zoom: window.zoom
-        }
-        Rectangle {
-          visible: window.view.kind !== "alias"
-          anchors.verticalCenter: parent.verticalCenter
-          width: 1
-          height: window.px(14)
-          color: Util.alpha(window.look.foreground, 0.2)
+          font.pixelSize: Math.round(Style.font.displayLarge * window.zoom)
         }
         Text {
-          visible: window.view.kind !== "alias"
-          anchors.verticalCenter: parent.verticalCenter
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
           textFormat: Text.PlainText
-          text: "Actions"
+          text: window.view.kind === "alias" ? window.view.title
+            : window.view.kind === "calculator-history" && !window.query ? window.tr("No Calculations Yet")
+            : (window.backend.ready ? (window.query ? window.tr("No matches for %1").arg(window.query) : window.tr("No results")) : window.tr("Loading…"))
           color: window.look.foreground
           opacity: 0.7
+          elide: Text.ElideRight
+          font.family: window.look.fontFamily
+          font.pixelSize: Math.round(Style.font.title * window.zoom)
+        }
+        Text {
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
+          wrapMode: Text.WordWrap
+          textFormat: Text.PlainText
+          text: window.view.kind === "alias" ? window.tr("Typing the alias exactly in the root search puts this command on top. Leave it empty to remove it.")
+            : window.view.kind === "calculator-history" && !window.query ? window.tr("Type a calculation in the root search, then copy or paste the answer.")
+            : ""
+          visible: text.length > 0
+          color: window.look.foreground
+          opacity: 0.52
           font.family: window.look.fontFamily
           font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
-        }
-        KeyHint {
-          visible: window.view.kind !== "alias"
-          anchors.verticalCenter: parent.verticalCenter
-          keys: window.actionPanelKeys
-          color: window.look.foreground
-          zoom: window.zoom
         }
       }
     }
@@ -1052,10 +1070,11 @@ PanelWindow {
       active: window.actionPanelOpen
       z: 10
       anchors.right: parent.right
-      anchors.rightMargin: card.borderRight + window.px(10)
-      anchors.bottom: footer.top
-      anchors.bottomMargin: window.px(6)
+      anchors.rightMargin: card.contentRightInset
+      anchors.bottom: parent.bottom
+      anchors.bottomMargin: card.contentBottomInset
       sourceComponent: ActionPanel {
+        placeholder: window.tr("Search for actions…")
         actions: window.actions
         look: window.look
         zoom: window.zoom
@@ -1069,13 +1088,13 @@ PanelWindow {
       z: 10
       width: window.px(240)
       anchors.right: parent.right
-      anchors.rightMargin: card.borderRight + window.px(10)
+      anchors.rightMargin: card.contentRightInset
       anchors.top: header.bottom
-      anchors.topMargin: window.px(4)
+      anchors.topMargin: window.contentSpacing
       sourceComponent: ActionPanel {
-        placeholder: "Filter…"
+        placeholder: window.tr("Filter…")
         actions: RootSearch.FILTERS.map(function(f) {
-          return { id: f.id, title: f.title, shortcut: "", section: "filter", icon: f.id === window.rootFilter ? "✓" : " " }
+          return { id: f.id, title: window.tr(f.title), shortcut: "", section: "filter", icon: f.id === window.rootFilter ? "✓" : " " }
         })
         look: window.look
         zoom: window.zoom
@@ -1089,13 +1108,13 @@ PanelWindow {
       z: 10
       width: window.px(280)
       anchors.left: parent.left
-      anchors.leftMargin: card.borderLeft + window.px(10)
-      anchors.bottom: footer.top
-      anchors.bottomMargin: window.px(6)
+      anchors.leftMargin: card.contentLeftInset
+      anchors.bottom: parent.bottom
+      anchors.bottomMargin: card.contentBottomInset
       sourceComponent: ActionPanel {
-        placeholder: "Search toast actions…"
+        placeholder: window.tr("Search toast actions…")
         actions: (window.toast ? window.toast.actions : []).map(function(a) {
-          return { id: a.id, title: a.title, shortcut: "", section: "toast", icon: " " }
+          return { id: a.id, title: window.tr(a.title), shortcut: "", section: "toast", icon: " " }
         })
         look: window.look
         zoom: window.zoom
@@ -1107,9 +1126,9 @@ PanelWindow {
       active: window.aboutOpen
       z: 10
       anchors.right: parent.right
-      anchors.rightMargin: card.borderRight + window.px(10)
-      anchors.bottom: footer.top
-      anchors.bottomMargin: window.px(6)
+      anchors.rightMargin: card.contentRightInset
+      anchors.bottom: parent.bottom
+      anchors.bottomMargin: card.contentBottomInset
       sourceComponent: InfoPanel {
         title: window.selectedRow ? window.selectedRow.title : ""
         rows: window.aboutRows
@@ -1124,6 +1143,7 @@ PanelWindow {
       anchors.fill: parent
       sourceComponent: Alert {
         spec: window.alert ? window.alert.spec : null
+        cancelText: window.tr("Cancel")
         look: window.look
         zoom: window.zoom
         onConfirmed: window.confirmAlert()

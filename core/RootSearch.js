@@ -39,6 +39,15 @@ var BUILTINS = [
     keywords: ["calculator", "calc", "math", "history", "conversions"],
     run: { push: { kind: "calculator-history", title: "Calculator History" } },
     rootSearch: { when: "always" }
+  },
+  {
+    id: "builtin:shortcuts",
+    title: "Keyboard Shortcuts",
+    subtitle: "Every key, also on ? in an empty search",
+    glyph: "\uf11c",                     // nf-fa-keyboard_o
+    keywords: ["shortcuts", "keys", "keyboard", "hotkeys", "help", "bindings"],
+    run: { push: { kind: "shortcuts", title: "Keyboard Shortcuts" } },
+    rootSearch: { when: "always" }
   }
 ]
 
@@ -334,6 +343,67 @@ function submenuSections(candidates, menuId, query, ctx, deps) {
   return ranked.length ? [{ id: "results", title: "Results", rows: ranked }] : []
 }
 
+// Keyboard Shortcuts view [D 2026-11-09]: every key, grouped, written the
+// way Omarchy writes keys ("Ctrl + K"). Omarchy's apps show this on ?; here
+// ? on an empty search opens it. vim: navigationBindings is vim-motions,
+// which moves with Ctrl+J/K and puts the action panel on Alt+K.
+function shortcutSections(query, vim) {
+  var panel = vim ? "Alt + K" : "Ctrl + K"
+  var groups = [
+    ["Moving Around", [
+      ["Move up and down", "↑ / ↓"],
+      [vim ? "Move down / up" : "Move down", vim ? "Ctrl + J / Ctrl + K" : "Ctrl + N"],
+      ["Move a page at a time", "Page Up / Page Down"],
+      ["Jump to the previous or next section", "Ctrl + ↑ / ↓"],
+      ["Earlier searches, on an empty search", "↑"],
+      ["Go back a level", "Esc / Ctrl + [ / Backspace"],
+      ["Go back to the start", "Shift + Esc"],
+      ["Show these shortcuts, on an empty search", "?"]
+    ]],
+    ["Doing Things", [
+      ["The main action", "Enter"],
+      ["The second action", "Ctrl + Enter"],
+      ["The third action", "Ctrl + Shift + Enter"],
+      ["The action at that number", "Ctrl + 1 … 9"],
+      ["Open a new window of an open app", "Shift + Enter"]
+    ]],
+    ["Lists and Panels", [
+      ["Actions for the selected row", panel],
+      ["About the selected row", "Ctrl + Shift + K"],
+      ["Filter: All, Applications or Commands", "Ctrl + P"],
+      ["The last message's action, such as Undo", "Ctrl + T"],
+      ["Move into and out of a search argument", "Tab / Shift + Tab"]
+    ]],
+    ["Common Actions", [
+      ["Copy the command or answer", "Ctrl + Shift + C"],
+      ["Add to or remove from Favorites", "Ctrl + Shift + F"],
+      ["Move a favorite up or down", "Ctrl + Alt + ↑ / ↓"],
+      ["Disable a command", "Alt + Shift + D"],
+      ["Delete an entry", "Ctrl + D"],
+      ["Delete all entries", "Ctrl + Shift + D"]
+    ]],
+    ["Window", [
+      ["Bigger / smaller / reset size", "Ctrl + + / − / 0"],
+      ["Close", "Esc"]
+    ]]
+  ]
+  var words = String(query || "").toLowerCase().split(/\s+/).filter(Boolean)
+  var out = []
+  for (var g = 0; g < groups.length; g++) {
+    var rows = []
+    for (var i = 0; i < groups[g][1].length; i++) {
+      var item = groups[g][1][i]
+      var hay = (groups[g][0] + " " + item[0] + " " + item[1]).toLowerCase()
+      var ok = true
+      for (var w = 0; w < words.length; w++) if (hay.indexOf(words[w]) < 0) { ok = false; break }
+      if (!ok) continue
+      rows.push({ candidate: { id: "shortcut:" + g + "-" + i, type: "command", kind: "shortcut", title: item[0], subtitle: "", typeLabel: item[1], glyph: "", rootSearch: { when: "always" } }, record: null })
+    }
+    if (rows.length) out.push({ id: "shortcuts-" + g, title: groups[g][0], rows: rows })
+  }
+  return out
+}
+
 function actionsFor(candidate) {
   if (candidate.kind === "calculator" || candidate.kind === "calculator-history") {
     // ↵ copies, Ctrl ↵ pastes (SPEC §8 Calculator) [O]; delete keys are
@@ -478,6 +548,7 @@ if (typeof module !== "undefined") {
     SUGGESTIONS_LIMIT: SUGGESTIONS_LIMIT,
     FALLBACKS: FALLBACKS,
     BUILTINS: BUILTINS,
+    shortcutSections: shortcutSections,
     FILTERS: FILTERS,
     fillArguments: fillArguments,
     missingArgument: missingArgument,

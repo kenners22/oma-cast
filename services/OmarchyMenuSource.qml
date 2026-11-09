@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Commons as Commons
 import "../core/OmarchyMenu.js" as OmarchyMenu
 
 Item {
@@ -11,6 +12,10 @@ Item {
   readonly property string userPath: Quickshell.env("HOME") + "/.config/omarchy/extensions/omarchy-menu.jsonc"
 
   property var defaultItems: []
+  // Omarchy's catalog for the language picked under Setup > Language; it
+  // follows a switch live, like the shell's own menu.
+  readonly property string language: Commons.I18n.language || "en"
+  property var menuCatalog: ({})
   property var userItems: []
   property var tree: OmarchyMenu.buildTree([], [])
   property var guards: ({ when: {}, checked: {}, disabled: {} })
@@ -99,7 +104,7 @@ Item {
   }
 
   function rebuild() {
-    source.tree = OmarchyMenu.buildTree(source.defaultItems, source.userItems)
+    source.tree = OmarchyMenu.buildTree(OmarchyMenu.applyTranslations(source.defaultItems, source.menuCatalog), source.userItems)
     source.revision++
     source.refresh()
   }
@@ -193,6 +198,19 @@ Item {
     onFileChanged: reload()
     onLoaded: source.load("default", text())
     onLoadFailed: { source.message("error", "Omarchy menu not found at " + source.defaultPath, null); source.load("default", "") }
+  }
+
+  FileView {
+    path: source.omarchyPath + "/default/i18n/" + source.language + "/menu.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      try { var parsed = JSON.parse(text()); source.menuCatalog = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : ({}) }
+      catch (e) { source.menuCatalog = ({}) }
+      source.rebuild()
+    }
+    onLoadFailed: { source.menuCatalog = ({}); source.rebuild() }
   }
 
   FileView {
